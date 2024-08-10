@@ -25,12 +25,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 Base = declarative_base()
 
+
 class Aggregate(Base):
     __tablename__ = 'aggregated_spend'
     i = Column(Integer, primary_key=True)
     supplier_name = Column(String)
     normalized_name = Column(String)
     matched = Column(Boolean)  # Changed from String to Boolean
+
 
 class FuzzyMatchResult(Base):
     __tablename__ = 'fuzzy_match_results'
@@ -42,12 +44,14 @@ class FuzzyMatchResult(Base):
     matched_id = Column(Integer)
     validation_status = Column(String)
 
+
 class ProcessingStatus(Base):
     __tablename__ = 'processing_status'
     id = Column(Integer, primary_key=True)
     last_processed_id = Column(Integer)
     total_records = Column(Integer)
     processed_records = Column(Integer)
+
 
 def normalize_name(name: str) -> str:
     if not name:
@@ -57,6 +61,7 @@ def normalize_name(name: str) -> str:
     name = name.lower()  # Convert to lowercase
     return ' '.join(name.split())  # Remove extra whitespace and join words
 
+
 def weighted_ratio(s1, s2, score_cutoff=0):
     """
     Custom weighted ratio function combining multiple string similarity metrics.
@@ -64,13 +69,14 @@ def weighted_ratio(s1, s2, score_cutoff=0):
     token_sort_ratio = fuzz.token_sort_ratio(s1, s2)
     token_set_ratio = fuzz.token_set_ratio(s1, s2)
     partial_ratio = fuzz.partial_ratio(s1, s2)
-    
+
     # Calculate weighted average
-    weighted_score = (0.4 * token_sort_ratio + 
-                      0.4 * token_set_ratio + 
+    weighted_score = (0.4 * token_sort_ratio +
+                      0.4 * token_set_ratio +
                       0.2 * partial_ratio)
-    
+
     return weighted_score
+
 
 def find_matches_and_scores(args: tuple) -> list:
     chunk, all_normalized_names, percentage_score = args
@@ -85,18 +91,19 @@ def find_matches_and_scores(args: tuple) -> list:
         )
         # Filter results based on percentage_score after extraction
         filtered_results = [match for match in results if match[1] >= percentage_score]
-        new_matches = [(row['i'], normalized_name, all_normalized_names[match[2]], match[2], match[1]) 
-                        for match in filtered_results if row['i'] < match[2]]
+        new_matches = [(row['i'], normalized_name, all_normalized_names[match[2]], match[2], match[1])
+                       for match in filtered_results if row['i'] < match[2]]
         matches.extend(new_matches)
         with total_processed.get_lock():
             total_processed.value += 1
     return matches
 
+
 def insert_in_batches(session, data, batch_size=10000):
     total_inserted = 0
     pbar = tqdm(total=len(data), desc="Inserting matches", unit="match")
     for i in range(0, len(data), batch_size):
-        batch = data[i:i+batch_size]
+        batch = data[i:i + batch_size]
         try:
             stmt = insert(FuzzyMatchResult).values([
                 {
@@ -119,23 +126,26 @@ def insert_in_batches(session, data, batch_size=10000):
     logging.info(f"Total records inserted into fuzzy_match_results: {total_inserted}")
     return total_inserted
 
+
 def ensure_columns_exist(engine):
     inspector = inspect(engine)
     existing_columns = [col['name'] for col in inspector.get_columns('aggregated_spend')]
-    
+
     with engine.begin() as connection:
         if 'normalized_name' not in existing_columns:
             connection.execute(text("ALTER TABLE aggregated_spend ADD COLUMN normalized_name VARCHAR"))
             logging.info("Added 'normalized_name' column to aggregated_spend table")
-        
+
         if 'matched' not in existing_columns:
             connection.execute(text("ALTER TABLE aggregated_spend ADD COLUMN matched BOOLEAN DEFAULT FALSE"))
             logging.info("Added 'matched' column to aggregated_spend table")
+
 
 def check_memory_usage():
     memory = psutil.virtual_memory()
     if memory.available < 5 * 1024 * 1024 * 1024:  # Less than 5GB available
         logging.warning("Available memory is running low. Consider reducing batch size or freeing up memory.")
+
 
 def retry_on_db_error(func):
     def wrapper(*args, **kwargs):
@@ -150,7 +160,9 @@ def retry_on_db_error(func):
                 logging.warning(f"Database error occurred: {str(e)}. Retrying in {retry_delay} seconds...")
                 time.sleep(retry_delay + random.uniform(0, 1))
                 retry_delay *= 2
+
     return wrapper
+
 
 @retry_on_db_error
 def update_normalized_names_batch(session, updates):
@@ -164,20 +176,22 @@ def update_normalized_names_batch(session, updates):
         # If the transaction fails, try updating one by one
         for aggregate_id, normalized_name in updates:
             try:
-                session.query(Aggregate).filter(Aggregate.i == aggregate_id).update({"normalized_name": normalized_name})
+                session.query(Aggregate).filter(Aggregate.i == aggregate_id).update(
+                    {"normalized_name": normalized_name})
                 session.commit()
             except Exception as inner_e:
                 logging.error(f"Error updating single record (id={aggregate_id}): {str(inner_e)}")
                 session.rollback()
 
+
 def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=100000):
     global total_to_process  # This line is no longer necessary, but can be kept for clarity
-    
+
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
-    
+
     ensure_columns_exist(engine)
-    
+
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -189,7 +203,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
         session.commit()
 
     # Check if all records are unmatched
-    total_records = session.query(func.count(Aggregate.i)).scalar()    
+    total_records = session.query(func.count(Aggregate.i)).scalar()
     unmatched_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == False).scalar()
 
     if unmatched_records == total_records:
@@ -202,10 +216,11 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
     logging.info("Loading all normalized names...")
     with tqdm(total=total_records, desc="Loading normalized names") as pbar:
         all_normalized_names = []
-        for chunk in pd.read_sql_query(session.query(Aggregate.i, Aggregate.normalized_name).statement, engine, chunksize=100000):
+        for chunk in pd.read_sql_query(session.query(Aggregate.i, Aggregate.normalized_name).statement, engine,
+                                       chunksize=100000):
             all_normalized_names.extend([(id, name) for id, name in chunk.values if name])
             pbar.update(len(chunk))
-    
+
     id_to_name = dict(all_normalized_names)
     all_normalized_names = list(id_to_name.values())
     logging.info(f"Loaded {len(all_normalized_names)} normalized names")
@@ -227,7 +242,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
     with tqdm(total=total_rows, desc="Overall progress") as pbar:
         for offset in range(0, total_rows, batch_size):
             check_memory_usage()
-            
+
             # Modify the query to only fetch rows where normalized_name is NULL or empty
             data = pd.read_sql_query(
                 query.filter((Aggregate.normalized_name == None) | (Aggregate.normalized_name == ''))
@@ -246,7 +261,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
                     normalized_name = normalize_name(row['supplier_name'])
                     updates.append((row['i'], normalized_name))
                     update_pbar.update(1)
-                    
+
                     if len(updates) == 100:
                         update_normalized_names_batch(session, updates)
                         updates = []
@@ -267,7 +282,8 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
             args = [(chunk, all_normalized_names, percentage_score) for chunk in data_chunks]
 
             with Pool(processes=num_cores) as pool:
-                results = list(tqdm(pool.imap(find_matches_and_scores, args), total=len(args), desc="Processing suppliers"))
+                results = list(
+                    tqdm(pool.imap(find_matches_and_scores, args), total=len(args), desc="Processing suppliers"))
 
             matches = [match for chunk_result in results for match in chunk_result]
 
@@ -309,6 +325,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
 
     logging.info("Processing complete and database updated.")
 
+
 if __name__ == "__main__":
     db_url = "postgresql://overlord:password@localhost:5432/postgres"
 
@@ -321,7 +338,7 @@ if __name__ == "__main__":
     check_memory_usage()
     process_suppliers(db_url, num_cores, percentage_score, batch_size)
     end_time = time.time()
-    
+
     elapsed_time = end_time - start_time
     logging.info(f"Total processing time: {elapsed_time:.2f} seconds")
 
@@ -340,9 +357,9 @@ if __name__ == "__main__":
 
     unmatched_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == False).scalar()
     last_processed = session.query(ProcessingStatus).first()
-    
+
     logging.info(f"Total records in Aggregate table: {total_records}")
     logging.info(f"Unmatched records: {unmatched_records}")
     logging.info(f"Last processed ID: {last_processed.last_processed_id if last_processed else 'None'}")
-    
+
     session.close()
