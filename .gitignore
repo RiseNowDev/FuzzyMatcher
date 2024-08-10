@@ -1,2 +1,14 @@
 
 !/raw/
+!/.env/
+!/.idea/!/output/
+!/.vscode/
+!/output/
+!/__pycache__/
+!/output/output_suppliers.xlsx
+
+!/output/output_suppliers_score_80.xlsx
+
+!/output/output_suppliers_score_85.xlsx
+
+!/output/output_suppliers_score_90.xlsx
