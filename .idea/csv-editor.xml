@@ -59,6 +59,13 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\raw\supps.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\raw\the new new.csv">
           <value>
             <Attribute>

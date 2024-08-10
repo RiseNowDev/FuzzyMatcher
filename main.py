@@ -54,7 +54,7 @@ def process_suppliers(input_file, output_file, num_cores=None, percentage_score=
 
 
 if __name__ == "__main__":
-    input_file = "raw/s1.csv"
+    input_file = "raw/archive/s1.csv"
     output_file = "output/test_csu_snorm.xlsx"
 
     percentage_score = float(input("Enter the percentage score to use for matching (default 89): ") or 89)
