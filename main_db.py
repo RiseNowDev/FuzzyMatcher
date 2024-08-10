@@ -185,24 +185,18 @@ def update_normalized_names_batch(session, updates):
 
 
 def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=100000):
-    global total_to_process  # This line is no longer necessary, but can be kept for clarity
-
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
-
     ensure_columns_exist(engine)
-
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    # Get or create the processing status
     status = session.query(ProcessingStatus).first()
     if status is None:
         status = ProcessingStatus(last_processed_id=0, total_records=0, processed_records=0)
         session.add(status)
         session.commit()
 
-    # Check if all records are unmatched
     total_records = session.query(func.count(Aggregate.i)).scalar()
     unmatched_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == False).scalar()
 
@@ -212,7 +206,6 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
         status.processed_records = 0
         session.commit()
 
-    # Load all normalized names
     logging.info("Loading all normalized names...")
     with tqdm(total=total_records, desc="Loading normalized names") as pbar:
         all_normalized_names = []
@@ -225,7 +218,6 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
     all_normalized_names = list(id_to_name.values())
     logging.info(f"Loaded {len(all_normalized_names)} normalized names")
 
-    # Fetch unprocessed rows
     query = session.query(Aggregate).filter(
         Aggregate.i > status.last_processed_id,
         (Aggregate.matched.is_(None)) | (Aggregate.matched == False)
@@ -243,10 +235,9 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
         for offset in range(0, total_rows, batch_size):
             check_memory_usage()
 
-            # Modify the query to only fetch rows where normalized_name is NULL or empty
             data = pd.read_sql_query(
-                query.filter((Aggregate.normalized_name == None) | (Aggregate.normalized_name == ''))
-                .order_by(Aggregate.i).offset(offset).limit(batch_size).statement,
+                query.filter((Aggregate.normalized_name == None) | (Aggregate.normalized_name == '')).order_by(
+                    Aggregate.i).offset(offset).limit(batch_size).statement,
                 engine
             )
 
@@ -254,7 +245,6 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
                 logging.info("No more unnormalized rows found. Moving to matching phase.")
                 break
 
-            # Update normalized_name in batches of 100
             updates = []
             with tqdm(total=len(data), desc="Normalizing names") as update_pbar:
                 for _, row in data.iterrows():
@@ -266,19 +256,11 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
                         update_normalized_names_batch(session, updates)
                         updates = []
 
-                # Update any remaining names
                 if updates:
                     update_normalized_names_batch(session, updates)
 
-            # Refresh data with all rows in this batch, including those already normalized
-            data = pd.read_sql_query(
-                query.order_by(Aggregate.i).offset(offset).limit(batch_size).statement,
-                engine
-            )
-
-            chunk_size = len(data) // num_cores
+            data = pd.read_sql_query(query.order_by(Aggregate.i).offset(offset).limit(batch_size).statement, engine)
             data_chunks = np.array_split(data, num_cores)
-
             args = [(chunk, all_normalized_names, percentage_score) for chunk in data_chunks]
 
             with Pool(processes=num_cores) as pool:
@@ -286,27 +268,21 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
                     tqdm(pool.imap(find_matches_and_scores, args), total=len(args), desc="Processing suppliers"))
 
             matches = [match for chunk_result in results for match in chunk_result]
-
-            # Insert matches into fuzzy_match_results table
             logging.info(f"Inserting {len(matches)} matches into fuzzy_match_results")
             insert_in_batches(session, matches)
 
-            # Update matched status in the Aggregate table
             with tqdm(total=len(data), desc="Updating matched status") as update_pbar:
                 for i in data['i']:
                     session.query(Aggregate).filter(Aggregate.i == i).update({Aggregate.matched: True})
                     update_pbar.update(1)
             session.commit()
 
-            # Update processing status
             status.last_processed_id = int(data['i'].max())
             status.processed_records += len(data)
             session.commit()
 
-            # Update the overall progress bar
             pbar.update(len(data))
 
-            # Calculate and display progress
             elapsed_time = time.time() - start_time
             processed_rows = status.processed_records
             remaining_rows = total_rows - processed_rows
@@ -317,12 +293,10 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
             logging.info(f"Records remaining: {remaining_rows}")
             logging.info(f"Estimated time to completion: {estimated_remaining_time:.2f} seconds")
 
-            # Add debug logging
             logging.info(f"Sample of normalized names: {data['normalized_name'].head().tolist()}")
             logging.info(f"Number of non-empty normalized names: {data['normalized_name'].notna().sum()}")
 
     session.close()
-
     logging.info("Processing complete and database updated.")
 
 
