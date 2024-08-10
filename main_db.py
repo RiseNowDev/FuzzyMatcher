@@ -4,17 +4,18 @@ from multiprocessing import Pool, cpu_count
 import tqdm
 import time
 import logging
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, func, Text
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, func, Text, text
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import inspect
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 Base = declarative_base()
 
-class Normie(Base):
-    __tablename__ = 'normie'
+class Aggregate(Base):
+    __tablename__ = 'aggregated_spend'
     i = Column(Integer, primary_key=True)
     supplier_name = Column(String)
     normalized_name = Column(String)
@@ -38,7 +39,7 @@ class ProcessingStatus(Base):
     processed_records = Column(Integer)
 
 def normalize_name(name: str) -> str:
-    return str(name).strip().lower()
+    return str(name).strip().lower() if name else ''
 
 def find_matches_and_scores(args: tuple) -> list:
     chunk, all_normalized_names, percentage_score = args
@@ -79,7 +80,8 @@ def insert_in_batches(session, data, batch_size=1000):
                 ]
             )
             session.commit()
-            total_inserted += result.rowcount
+            # Use the rowcount from the Result object
+            total_inserted += len(batch)  # Assuming all rows in the batch were inserted successfully
         except Exception as e:
             logging.error(f"Error inserting batch into fuzzy_match_results: {str(e)}")
             session.rollback()
@@ -87,9 +89,26 @@ def insert_in_batches(session, data, batch_size=1000):
     logging.info(f"Total records inserted into fuzzy_match_results: {total_inserted}")
     return total_inserted
 
+def ensure_columns_exist(engine):
+    inspector = inspect(engine)
+    existing_columns = [col['name'] for col in inspector.get_columns('aggregated_spend')]
+    
+    with engine.begin() as connection:
+        if 'normalized_name' not in existing_columns:
+            connection.execute(text("ALTER TABLE aggregated_spend ADD COLUMN normalized_name VARCHAR"))
+            logging.info("Added 'normalized_name' column to aggregated_spend table")
+        
+        if 'matched' not in existing_columns:
+            connection.execute(text("ALTER TABLE aggregated_spend ADD COLUMN matched BOOLEAN DEFAULT FALSE"))
+            logging.info("Added 'matched' column to aggregated_spend table")
+
 def process_suppliers(db_url, num_cores=None, percentage_score=89, batch_size=10000):
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
+    
+    # Ensure the required columns exist
+    ensure_columns_exist(engine)
+    
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -101,8 +120,8 @@ def process_suppliers(db_url, num_cores=None, percentage_score=89, batch_size=10
         session.commit()
 
     # Check if all records are unmatched
-    total_records = session.query(func.count(Normie.i)).scalar()
-    unmatched_records = session.query(func.count(Normie.i)).filter(Normie.matched == False).scalar()
+    total_records = session.query(func.count(Aggregate.i)).scalar()    
+    unmatched_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == False).scalar()
 
     if unmatched_records == total_records:
         logging.info("All records are unmatched. Resetting the processing status.")
@@ -111,9 +130,9 @@ def process_suppliers(db_url, num_cores=None, percentage_score=89, batch_size=10
         session.commit()
 
     # Fetch unprocessed rows
-    query = session.query(Normie).filter(
-        Normie.i > status.last_processed_id,
-        Normie.matched == False
+    query = session.query(Aggregate).filter(
+        Aggregate.i > status.last_processed_id,
+        (Aggregate.matched.is_(None)) | (Aggregate.matched == False)
     )
     total_rows = query.count()
     num_cores = num_cores or cpu_count()
@@ -125,7 +144,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=89, batch_size=10
 
     for offset in range(0, total_rows, batch_size):
         data = pd.read_sql_query(
-            query.order_by(Normie.i).offset(offset).limit(batch_size).statement,
+            query.order_by(Aggregate.i).offset(offset).limit(batch_size).statement,
             engine
         )
 
@@ -133,17 +152,20 @@ def process_suppliers(db_url, num_cores=None, percentage_score=89, batch_size=10
             logging.info("No more unprocessed rows found. Exiting.")
             break
 
-        # Update normalized_name in the Normie table before processing
+        # Update normalized_name in the Aggregate table only if it's NULL or empty
         for index, row in data.iterrows():
             normalized_name = normalize_name(row['supplier_name'])
-            session.query(Normie).filter(Normie.i == row['i']).update({
-                Normie.normalized_name: normalized_name,
+            session.query(Aggregate).filter(
+                Aggregate.i == row['i'],
+                (Aggregate.normalized_name.is_(None)) | (Aggregate.normalized_name == '')
+            ).update({
+                Aggregate.normalized_name: normalized_name,
             }, synchronize_session=False)
         session.commit()
 
         # Refresh data with updated normalized_names
         data = pd.read_sql_query(
-            query.order_by(Normie.i).offset(offset).limit(batch_size).statement,
+            query.order_by(Aggregate.i).offset(offset).limit(batch_size).statement,
             engine
         )
 
@@ -163,10 +185,13 @@ def process_suppliers(db_url, num_cores=None, percentage_score=89, batch_size=10
         logging.info(f"Inserting {len(matches)} matches into fuzzy_match_results")
         insert_in_batches(session, matches)
 
-        # Update matched status in the Normie table
+        # Update matched status in the Aggregate table only if it's NULL or False
         for index, row in data.iterrows():
-            session.query(Normie).filter(Normie.i == row['i']).update({
-                Normie.matched: True
+            session.query(Aggregate).filter(
+                Aggregate.i == row['i'],
+                (Aggregate.matched.is_(None)) | (Aggregate.matched == False)
+            ).update({
+                Aggregate.matched: True
             }, synchronize_session=False)
         session.commit()
 
@@ -210,8 +235,8 @@ if __name__ == "__main__":
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    total_records = session.query(func.count(Normie.i)).scalar()
-    processed_records = session.query(func.count(Normie.i)).filter(Normie.matched == True).scalar()
+    total_records = session.query(func.count(Aggregate.i)).scalar()
+    processed_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == True).scalar()
     remaining_records = total_records - processed_records
 
     logging.info(f"Total records: {total_records}")
@@ -219,10 +244,10 @@ if __name__ == "__main__":
     logging.info(f"Remaining records: {remaining_records}")
 
     # Add these lines for debugging
-    unmatched_records = session.query(func.count(Normie.i)).filter(Normie.matched == False).scalar()
+    unmatched_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == False).scalar()
     last_processed = session.query(ProcessingStatus).first()
     
-    logging.info(f"Total records in Normie table: {total_records}")
+    logging.info(f"Total records in Aggregate table: {total_records}")
     logging.info(f"Unmatched records: {unmatched_records}")
     logging.info(f"Last processed ID: {last_processed.last_processed_id if last_processed else 'None'}")
     
