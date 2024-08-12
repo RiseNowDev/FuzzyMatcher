@@ -32,6 +32,7 @@ class Aggregate(Base):
     supplier_name = Column(String)
     normalized_name = Column(String)
     matched = Column(Boolean)  # Changed from String to Boolean
+    source = Column(String)  # Add this line
 
 
 class FuzzyMatchResult(Base):
@@ -43,6 +44,7 @@ class FuzzyMatchResult(Base):
     source_id = Column(Integer)
     matched_id = Column(Integer)
     validation_status = Column(String)
+    source = Column(String)  # Add this line
 
 
 class ProcessingStatus(Base):
@@ -91,7 +93,9 @@ def find_matches_and_scores(args: tuple) -> list:
         )
         # Filter results based on percentage_score after extraction
         filtered_results = [match for match in results if match[1] >= percentage_score]
-        new_matches = [(row['i'], normalized_name, all_normalized_names[match[2]], match[2], match[1])
+        if not filtered_results:
+            logging.debug(f"No matches found for '{normalized_name}' with score >= {percentage_score}")
+        new_matches = [(row['i'], normalized_name, all_normalized_names[match[2]], match[2], match[1], row['source'])
                        for match in filtered_results if row['i'] < match[2]]
         matches.extend(new_matches)
         with total_processed.get_lock():
@@ -111,7 +115,9 @@ def insert_in_batches(session, data, batch_size=10000):
                     "source_string": match[1],
                     "matched_string": match[2],
                     "matched_id": match[3],
-                    "similarity_score": match[4]
+                    "similarity_score": match[4],
+                    "validation_status": None,  # Add this line
+                    "source": match[5]
                 }
                 for match in batch
             ])
@@ -139,6 +145,16 @@ def ensure_columns_exist(engine):
         if 'matched' not in existing_columns:
             connection.execute(text("ALTER TABLE csu_fivesixseven ADD COLUMN matched BOOLEAN DEFAULT FALSE"))
             logging.info("Added 'matched' column to csu_fivesixseven table")
+
+
+def ensure_fuzzy_match_results_columns_exist(engine):
+    inspector = inspect(engine)
+    existing_columns = [col['name'] for col in inspector.get_columns('fuzzy_match_results')]
+
+    with engine.begin() as connection:
+        if 'source' not in existing_columns:
+            connection.execute(text("ALTER TABLE fuzzy_match_results ADD COLUMN source VARCHAR"))
+            logging.info("Added 'source' column to fuzzy_match_results table")
 
 
 def check_memory_usage():
@@ -188,6 +204,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
     ensure_columns_exist(engine)
+    ensure_fuzzy_match_results_columns_exist(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -236,13 +253,12 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
             check_memory_usage()
 
             data = pd.read_sql_query(
-                query.filter((Aggregate.normalized_name == None) | (Aggregate.normalized_name == '')).order_by(
-                    Aggregate.i).offset(offset).limit(batch_size).statement,
+                query.order_by(Aggregate.i).offset(offset).limit(batch_size).statement,
                 engine
             )
 
             if data.empty:
-                logging.info("No more unnormalized rows found. Moving to matching phase.")
+                logging.info("No more unprocessed rows found. Exiting processing loop.")
                 break
 
             updates = []
