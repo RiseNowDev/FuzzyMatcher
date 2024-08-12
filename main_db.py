@@ -27,7 +27,7 @@ Base = declarative_base()
 
 
 class Aggregate(Base):
-    __tablename__ = 'the_new_new'
+    __tablename__ = 'csu_fivesixseven'
     i = Column(Integer, primary_key=True)
     supplier_name = Column(String)
     normalized_name = Column(String)
@@ -129,16 +129,16 @@ def insert_in_batches(session, data, batch_size=10000):
 
 def ensure_columns_exist(engine):
     inspector = inspect(engine)
-    existing_columns = [col['name'] for col in inspector.get_columns('the_new_new')]
+    existing_columns = [col['name'] for col in inspector.get_columns('csu_fivesixseven')]
 
     with engine.begin() as connection:
         if 'normalized_name' not in existing_columns:
-            connection.execute(text("ALTER TABLE the_new_new ADD COLUMN normalized_name VARCHAR"))
-            logging.info("Added 'normalized_name' column to the_new_new table")
+            connection.execute(text("ALTER TABLE csu_fivesixseven ADD COLUMN normalized_name VARCHAR"))
+            logging.info("Added 'normalized_name' column to csu_fivesixseven table")
 
         if 'matched' not in existing_columns:
-            connection.execute(text("ALTER TABLE the_new_new ADD COLUMN matched BOOLEAN DEFAULT FALSE"))
-            logging.info("Added 'matched' column to the_new_new table")
+            connection.execute(text("ALTER TABLE csu_fivesixseven ADD COLUMN matched BOOLEAN DEFAULT FALSE"))
+            logging.info("Added 'matched' column to csu_fivesixseven table")
 
 
 def check_memory_usage():
@@ -301,7 +301,7 @@ def process_suppliers(db_url, num_cores=None, percentage_score=85, batch_size=10
 
 
 if __name__ == "__main__":
-    db_url = "postgresql://overlord:password@localhost:5432/ars"
+    db_url = "postgresql://overlord:password@localhost:5432/csu"
 
     percentage_score = float(input("Enter the percentage score to use for matching (default 85): ") or 85)
     num_cores_input = input("Enter the number of cores to use (default max): ")
