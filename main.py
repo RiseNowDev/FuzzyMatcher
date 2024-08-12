@@ -1,111 +1,456 @@
-import pandas as pd
-from rapidfuzz import process, fuzz
-from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
-import time
-import logging
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+# Import necessary libraries
+import pandas as pd  # For data manipulation
+from rapidfuzz import process, fuzz  # For fuzzy string matching
+from multiprocessing import Pool, cpu_count, Manager  # For parallel processing
+from tqdm import tqdm  # For progress bars
+import time  # For time-related functions
+import logging  # For logging
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, func, Text, Table, text, MetaData, bindparam  # For database operations
+from sqlalchemy.orm import declarative_base, sessionmaker  # For ORM and session management
+from sqlalchemy.dialects.postgresql import insert  # For PostgreSQL-specific operations
+from sqlalchemy import inspect  # For database inspection
+import psutil  # For system and process utilities
+import numpy as np  # For numerical operations
+from collections import defaultdict  # For dictionary operations
+import multiprocessing as mp  # For multiprocessing
+from sqlalchemy.exc import OperationalError, InternalError  # For handling SQLAlchemy exceptions
+import random  # For random number generation
+import re  # For regular expressions
+import datetime  # For timestamp generation
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Define the Base class for ORM models
+Base = declarative_base()
+
+# Define ORM models
+# This Python class named Aggregate represents a table named 'csu_fivesixseven' with columns for
+# integer primary key, supplier name, normalized name, match status, and source.
+class Aggregate(Base):
+    """
+    Represents an aggregate entity in the 'csu_fivesixseven' table.
+
+    Attributes:
+        i (int): The primary key of the entity.
+        supplier_name (str): The name of the supplier.
+        normalized_name (str): The normalized name of the supplier.
+        matched (bool): Indicates if the entity has been matched.
+        source (str): The source of the entity.
+    """
+    __tablename__ = 'csu_fivesixseven'
+    i = Column(Integer, primary_key=True)
+    supplier_name = Column(String)
+    normalized_name = Column(String)
+    matched = Column(Boolean, default=False)
+    source = Column(String)
+
+# This class defines a table named 'processing_status' with columns for id, last_processed_id,
+# total_records, and processed_records.
+class ProcessingStatus(Base):
+    """
+    Represents the processing status of a record.
+
+    Attributes:
+        id (int): The unique identifier of the processing status.
+        last_processed_id (int): The ID of the last processed record.
+        total_records (int): The total number of records.
+        processed_records (int): The number of records that have been processed.
+    """
+    __tablename__ = 'processing_status'
+    id = Column(Integer, primary_key=True)
+    last_processed_id = Column(Integer)
+    total_records = Column(Integer)
+    processed_records = Column(Integer)
+
+# The `FuzzyMatchResult` class defines a database table with columns for storing fuzzy matching
+# results.
+class FuzzyMatchResult(Base):
+    """
+    Represents a fuzzy match result between two strings.
+
+    Attributes:
+        id (int): The unique identifier of the match result.
+        source_string (str): The original string from the source.
+        matched_string (str): The string that was matched.
+        similarity_score (float): The similarity score between the source and matched strings.
+        source_id (int): The identifier of the source.
+        matched_id (int): The identifier of the matched string.
+        validation_status (str): The validation status of the match result.
+        source (str): The source of the match result.
+    """
+
+    __tablename__ = 'fuzzy_match_results'  # This will be overridden
+    id = Column(Integer, primary_key=True)
+    source_string = Column(String)
+    matched_string = Column(String)
+    similarity_score = Column(Float)
+    source_id = Column(Integer)
+    matched_id = Column(Integer)
+    validation_status = Column(String)
+    source = Column(String)
+
+    # Add this method to set the table name dynamically
+    @classmethod
+    def set_table_name(cls, name):
+        cls.__table__.name = name
+
+# Function to normalize names by removing digits, special characters, and converting to lowercase
+import re
 
 def normalize_name(name: str) -> str:
-    return str(name).strip().lower()
+    """
+    Normalize a given name by removing digits, replacing special characters with space,
+    converting to lowercase, removing extra whitespace, and joining words.
 
-def find_matches_and_scores(args: tuple) -> tuple:
-    chunk, all_normalized_names, percentage_score, supplier_name, i = args
+    Args:
+        name (str): The name to be normalized.
+
+    Returns:
+        str: The normalized name.
+    """
+    if not name:
+        return ''
+    name = re.sub(r'\d+', '', name)  # Remove digits
+    name = re.sub(r'[^\w\s]', ' ', name)  # Replace special characters with space
+    name = name.lower()  # Convert to lowercase
+    return ' '.join(name.split())  # Remove extra whitespace and join words
+
+# Custom weighted ratio function combining multiple string similarity metrics
+def weighted_ratio(s1, s2, score_cutoff=0):
+    """
+    Calculates the weighted ratio between two strings.
+
+    Args:
+        s1 (str): The first string.
+        s2 (str): The second string.
+        score_cutoff (int, optional): The minimum score required for a match. Defaults to 0.
+
+    Returns:
+        float: The weighted ratio score between the two strings.
+    """
+    token_sort_ratio = fuzz.token_sort_ratio(s1, s2)
+    token_set_ratio = fuzz.token_set_ratio(s1, s2)
+    partial_ratio = fuzz.partial_ratio(s1, s2)
+
+    # Calculate weighted average
+    weighted_score = (0.4 * token_sort_ratio +
+                      0.4 * token_set_ratio +
+                      0.2 * partial_ratio)
+
+    return weighted_score
+
+# Function to find matches and scores for a chunk of data
+def find_matches_and_scores(args: tuple) -> list:
+    """
+    Find matches and scores for a given chunk of data.
+
+    Args:
+        args (tuple): A tuple containing the chunk of data, all normalized names, and the percentage score.
+
+    Returns:
+        list: A list of matches and their scores.
+
+    """
+    chunk, all_normalized_names, percentage_score = args
     matches = []
-    for idx, row in chunk.iterrows():
-        normalized_name = row['Normalized_Name']
+    for idx, row in tqdm(chunk.iterrows(), total=len(chunk), desc="Processing chunk", leave=False):
+        normalized_name = row['normalized_name']
         results = process.extract(
             normalized_name,
             all_normalized_names,
-            scorer=fuzz.token_set_ratio,
-            score_cutoff=percentage_score,
-            limit=10
+            scorer=weighted_ratio,
+            limit=100
         )
-        matches.append([(all_normalized_names[match[2]], match[2], match[1]) for match in results])
+        # Filter results based on percentage_score during extraction
+        filtered_results = [match for match in results if match[1] >= percentage_score and row['i'] < match[2]]
+        if not filtered_results:
+            logging.debug(f"No matches found for '{normalized_name}' with score >= {percentage_score}")
+        else:
+            matches.extend((row['i'], normalized_name, all_normalized_names[match[2]], match[2], match[1], row['source'])
+                           for match in filtered_results)
     return matches
 
-def group_matches(data, matches):
-    grouped_matches = []
-    for idx, (row, match_list) in enumerate(zip(data.itertuples(), matches)):
-        for match, match_idx, score in match_list:
-            grouped_matches.append({
-                'Original_Name': row.Normalized_Name,
-                'Original_Index': getattr(row, 'i', idx),
-                'Match_Name': match,
-                'Match_Index': match_idx,
-                'Score': score,
-                'Suspicious': score < 95 or len(match) < 5  # Flag suspicious matches
-            })
-    return pd.DataFrame(grouped_matches)
+# Class to process the main database
+class MainDBProcessor:
+    class FuzzyMatcher:
+        def __init__(self, db_url, percentage_score=85, num_cores=None, batch_size=200000):
+            """
+            Initializes a FuzzyMatcher object.
 
-def process_suppliers(input_file, output_file, num_cores=None, percentage_score=89,
-                      supplier_name='supplier_name', i='i'):
-    data = pd.read_csv(input_file)
-    total_rows = len(data)
-    num_cores = num_cores or cpu_count()
+            Parameters:
+            - db_url (str): The URL of the database to connect to.
+            - percentage_score (int): The minimum percentage score for a fuzzy match to be considered a match. Default is 85.
+            - num_cores (int): The number of CPU cores to use for parallel processing. If not provided, it will use all available cores.
+            - batch_size (int): The number of records to process in each batch. Default is 200000.
+            """
+            self.db_url = db_url
+            self.percentage_score = percentage_score
+            self.num_cores = num_cores or cpu_count()
+            self.batch_size = batch_size
+            self.engine = create_engine(db_url)
+            self.Session = sessionmaker(bind=self.engine)
+            self.session = self.Session()
+            self.metadata = MetaData()
+            self.metadata.reflect(bind=self.engine)
+            
+            # Generate timestamped output table name
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.output_table_name = f'fuzzy_match_results_{timestamp}'
+            
+            self._setup_logging()
+            self._create_tables()
 
-    logging.info(f"Total rows: {total_rows}")
-    logging.info(f"Using {num_cores} cores")
+    # Function to check memory usage
+    def check_memory_usage(self):
+        """
+        The `check_memory_usage` function logs information about the system's memory usage, including total
+        memory, available memory, used memory, and memory usage percentage.
+        """
+        memory = psutil.virtual_memory()
+        logging.info(f"Total memory: {memory.total / (1024 ** 3):.2f} GB")
+        logging.info(f"Available memory: {memory.available / (1024 ** 3):.2f} GB")
+        logging.info(f"Used memory: {memory.used / (1024 ** 3):.2f} GB")
+        logging.info(f"Memory usage: {memory.percent}%")
 
-    if 'Normalized_Name' not in data.columns:
-        data['Normalized_Name'] = data[supplier_name].apply(normalize_name)
+    # Function to insert matches in batches
+    def insert_in_batches(self, matches):
+        """
+        The `insert_in_batches` function inserts data in batches into a database table while handling
+        conflicts by not updating existing records.
+        
+        :param matches: The `matches` parameter in the `insert_in_batches` method seems to be a list of
+        matches where each match is a tuple or list containing at least 6 elements. Here is the breakdown of
+        each element based on how they are accessed in the method:
+        """
+        batch_size = 10000
+        for i in range(0, len(matches), batch_size):
+            batch = matches[i:i + batch_size]
+            insert_data = [
+                {
+                    'source_string': match[1],
+                    'matched_string': match[2],
+                    'similarity_score': match[4],
+                    'source_id': match[0],
+                    'matched_id': match[3],
+                    'source': match[5],
+                    'validation_status': 'pending'
+                }
+                for match in batch
+            ]
+            insert_stmt = insert(FuzzyMatchResult.__table__).values(insert_data)
+            on_conflict_stmt = insert_stmt.on_conflict_do_nothing(index_elements=['id'])
+            self.session.execute(on_conflict_stmt)
+            self.session.commit()
 
-    all_normalized_names = data['Normalized_Name'].tolist()
+    # Function to process suppliers
+    def process_suppliers(self):
+        """
+        The `process_suppliers` function processes supplier data in batches, finding matches and scores
+        using multiprocessing, and updating processing status accordingly.
+        """
+        total_rows = self.session.query(func.count(Aggregate.i)).scalar()
+        status = self.session.query(ProcessingStatus).first()
+        if not status:
+            status = ProcessingStatus(last_processed_id=0, total_records=total_rows, processed_records=0)
+            self.session.add(status)
+            self.session.commit()
 
-    chunk_size = total_rows // num_cores
-    data_chunks = [data[i:i + chunk_size] for i in range(0, total_rows, chunk_size)]
+        start_time = time.time()
+        with tqdm(total=total_rows, desc="Processing suppliers") as pbar:
+            while status.processed_records < total_rows:
+                logging.debug(f"Processing from ID {status.last_processed_id + 1}")
+                data = pd.read_sql(
+                    self.session.query(Aggregate.i, Aggregate.normalized_name, Aggregate.source)
+                    .filter(Aggregate.i > status.last_processed_id)
+                    .order_by(Aggregate.i)
+                    .limit(self.batch_size)
+                    .statement,
+                    self.session.bind
+                )
 
-    args = [(chunk, all_normalized_names, percentage_score, supplier_name, i) for chunk in data_chunks]
+                if data.empty:
+                    logging.info("No more data to process.")
+                    break
 
-    with Pool(processes=num_cores) as pool:
-        results = list(tqdm(pool.imap(find_matches_and_scores, args), total=len(args), desc="Processing suppliers"))
+                logging.info(f"Fetched {len(data)} rows for processing.")
+                all_normalized_names = data['normalized_name'].tolist()
+                
+                chunks = [data.iloc[i:i + len(data) // self.num_cores] for i in range(0, len(data), len(data) // self.num_cores)]
+                args = [(chunk, all_normalized_names, self.percentage_score) for chunk in chunks]
 
-    matches = [match for chunk_result in results for match in chunk_result]
-    data['Potential_Matches'] = [', '.join([f"{match}|{idx}|{idx}|{score}" for match, idx, score in match_list]) for match_list in matches]
-    
-    # Create the grouped matches DataFrame
-    grouped_matches_df = group_matches(data, matches)
+                with Pool(processes=self.num_cores) as pool:
+                    results = list(tqdm(pool.imap(find_matches_and_scores, args), total=len(args), desc="Finding matches"))
 
-    # Save both sheets to the Excel file
-    with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        data.to_excel(writer, sheet_name='Original_Data', index=False)
-        grouped_matches_df.to_excel(writer, sheet_name='Grouped_Matches', index=False)
+                matches = [match for result in results for match in result]
+                self.insert_in_batches(matches)
 
-    # Highlight suspicious matches
-    highlight_suspicious_matches(output_file)
+                # Convert NumPy int64 to standard Python int
+                status.last_processed_id = int(data['i'].max())
+                status.processed_records += int(len(data))
+                self.session.commit()
+                pbar.update(len(data))
 
-    logging.info(f"Results saved to {output_file}")
+                elapsed_time = time.time() - start_time
+                logging.info(f"Processed {status.processed_records}/{total_rows} rows in {elapsed_time:.2f} seconds")
 
-def highlight_suspicious_matches(file_path):
-    workbook = load_workbook(file_path)
-    sheet = workbook['Grouped_Matches']
-    
-    red_fill = PatternFill(start_color='FFFF0000', end_color='FFFF0000', fill_type='solid')
-    
-    for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=6, max_col=6):
-        for cell in row:
-            if cell.value == True:
-                for col in range(1, 7):
-                    sheet.cell(row=cell.row, column=col).fill = red_fill
+        logging.info("Processing complete")
+        self.session.close()
 
-    workbook.save(file_path)
+    # Function to update normalized names in batches
+    def update_normalized_names_batch(self, updates):
+        """
+        The function `update_normalized_names_batch` updates the `normalized_name` field in the `Aggregate`
+        table for a batch of records provided in the `updates` parameter.
+        
+        :param updates: The `updates` parameter in the `update_normalized_names_batch` method is expected to
+        be a dictionary containing the values that need to be updated in the database table. Each key-value
+        pair in the dictionary represents the column to be updated and the new value to be set for that
+        column in the database table
+        """
+        update_stmt = (
+            Aggregate.__table__.update()
+            .where(Aggregate.i == bindparam('i'))
+            .values(normalized_name=bindparam('normalized_name'))
+        )
+        self.session.execute(update_stmt, updates)
+        self.session.commit()
+
+    # Function to ensure necessary columns exist in the database
+    def ensure_columns_exist(self):
+        """
+        This function ensures that specific columns exist in a table by adding them if they are missing.
+        """
+        inspector = inspect(self.engine)
+        existing_columns = [col['name'] for col in inspector.get_columns('csu_fivesixseven')]
+
+        with self.engine.begin() as connection:
+            if 'normalized_name' not in existing_columns:
+                connection.execute(text("ALTER TABLE csu_fivesixseven ADD COLUMN normalized_name VARCHAR"))
+                logging.info("Added 'normalized_name' column to csu_fivesixseven table")
+
+            if 'matched' not in existing_columns:
+                connection.execute(text("ALTER TABLE csu_fivesixseven ADD COLUMN matched BOOLEAN DEFAULT FALSE"))
+                logging.info("Added 'matched' column to csu_fivesixseven table")
+
+    # Function to ensure necessary columns exist in the fuzzy match results table
+    def ensure_fuzzy_match_results_columns_exist(self):
+        """
+        The function `ensure_fuzzy_match_results_columns_exist` checks and adds specific columns to a
+        table if they do not already exist.
+        """
+        inspector = inspect(self.engine)
+        existing_columns = [col['name'] for col in inspector.get_columns(self.output_table_name)]
+
+        with self.engine.begin() as connection:
+            if 'source_string' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN source_string VARCHAR"))
+                logging.info(f"Added 'source_string' column to {self.output_table_name} table")
+
+            if 'matched_string' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN matched_string VARCHAR"))
+                logging.info(f"Added 'matched_string' column to {self.output_table_name} table")
+
+            if 'similarity_score' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN similarity_score FLOAT"))
+                logging.info(f"Added 'similarity_score' column to {self.output_table_name} table")
+
+            if 'source_id' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN source_id INTEGER"))
+                logging.info(f"Added 'source_id' column to {self.output_table_name} table")
+
+            if 'matched_id' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN matched_id INTEGER"))
+                logging.info(f"Added 'matched_id' column to {self.output_table_name} table")
+
+            if 'validation_status' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN validation_status VARCHAR"))
+                logging.info(f"Added 'validation_status' column to {self.output_table_name} table")
+
+            if 'source' not in existing_columns:
+                connection.execute(text(f"ALTER TABLE {self.output_table_name} ADD COLUMN source VARCHAR"))
+                logging.info(f"Added 'source' column to {self.output_table_name} table")
+
+    # Function to set up logging
+    def _setup_logging(self):
+        """
+        The function sets up logging and creates necessary tables for a FuzzyMatchResult object.
+        """
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Function to create necessary tables
+    def _create_tables(self):
+        """
+        The function `_create_tables` sets the table name for `FuzzyMatchResult`, creates all tables in the
+        database, and ensures the existence of certain columns.
+        """
+        FuzzyMatchResult.set_table_name(self.output_table_name)
+        Base.metadata.create_all(self.engine)
+        self.ensure_columns_exist()
+        self.ensure_fuzzy_match_results_columns_exist()
 
 if __name__ == "__main__":
-    input_file = "raw/csusupps.csv"
-    output_file = "output/csu_snorm.xlsx"
+    # Define the database URL for PostgreSQL
+    db_url = "postgresql://overlord:password@localhost:5432/csu"
 
-    percentage_score = float(input("Enter the percentage score to use for matching (default 89): ") or 89)
-    name_field = input("Enter the name field to use (default supplier_name): ") or "supplier_name"
-    i = input("Enter the name of the column which is your index. (default i): ") or "i"
-    num_cores_input = input("Enter the number of cores to use (default max): ")
-    num_cores = int(num_cores_input) if num_cores_input.strip() else None
-
-    start_time = time.time()
-    process_suppliers(input_file, output_file, num_cores, percentage_score, name_field, i)
-    end_time = time.time()
+    # Prompt user for percentage score, defaulting to 85 if no input is provided
+    percentage_score = float(input("Enter the percentage score to use for matching (default 85): ") or 85)
     
+    # Prompt user for number of cores to use
+    num_cores_input = input("Enter the number of cores to use (default max): ")
+    # Convert input to integer if provided, otherwise set to None (which will use max cores)
+    num_cores = int(num_cores_input) if num_cores_input.strip() else None
+    
+    # Prompt user for batch size, defaulting to 200000 if no input is provided
+    batch_size = int(input("Enter the batch size (default 200000): ") or 200000)
+
+    # Initialize the MainDBProcessor with user-provided parameters
+    processor = MainDBProcessor(db_url, percentage_score, num_cores, batch_size)
+    
+    # Record the start time for performance measurement
+    start_time = time.time()
+    
+    # Check and log current memory usage
+    processor.check_memory_usage()
+    
+    # Start the main processing of suppliers
+    processor.process_suppliers()
+    
+    # Record the end time after processing is complete
+    end_time = time.time()
+
+    # Calculate and log the total processing time
     elapsed_time = end_time - start_time
     logging.info(f"Total processing time: {elapsed_time:.2f} seconds")
+
+    # Begin displaying final statistics
+    
+    # Create a new database engine and session
+    engine = create_engine(db_url)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    # Query the total number of records in the Aggregate table
+    total_records = session.query(func.count(Aggregate.i)).scalar()
+    
+    # Query the number of processed (matched) records
+    processed_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == True).scalar()
+    
+    # Calculate the number of remaining (unprocessed) records
+    remaining_records = total_records - processed_records
+
+    # Log the statistics
+    logging.info(f"Total records: {total_records}")
+    logging.info(f"Processed records: {processed_records}")
+    logging.info(f"Remaining records: {remaining_records}")
+
+    # Query the number of unmatched records
+    unmatched_records = session.query(func.count(Aggregate.i)).filter(Aggregate.matched == False).scalar()
+    
+    # Query the last processed record from the ProcessingStatus table
+    last_processed = session.query(ProcessingStatus).first()
+
+    # Log additional statistics
+    logging.info(f"Total records in Aggregate table: {total_records}")
+    logging.info(f"Unmatched records: {unmatched_records}")
+    logging.info(f"Last processed ID: {last_processed.last_processed_id if last_processed else 'None'}")
+
+    # Close the database session
+    session.close()
