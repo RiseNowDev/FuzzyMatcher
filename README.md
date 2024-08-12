@@ -2,58 +2,56 @@
 
 ## Overview
 
-This Python script processes a CSV file containing supplier information and finds potential matches using fuzzy string matching. It's designed to handle large datasets efficiently using multiprocessing.
+This Python program is designed to help businesses find potential matches among their supplier names. It's particularly useful when dealing with large lists of suppliers where names might be slightly different but actually refer to the same company. The program uses advanced text comparison techniques to identify these potential matches.
 
-## Features
+## What Does This Program Do?
 
-- Normalizes supplier names for consistent comparison
-- Uses fuzzy string matching to find potential duplicates
-- Employs multiprocessing for improved performance
-- Provides progress updates during processing
-- Outputs results to an Excel file
+1. **Reads Supplier Data**: The program connects to a database that contains a list of supplier names.
 
-## Requirements
+2. **Cleans Up Names**: It standardizes all supplier names by removing numbers, special characters, and extra spaces. This helps in comparing names more accurately.
 
-- Python 3.x
-- pandas
-- fuzzywuzzy
-- openpyxl
+3. **Compares Names**: Using a technique called "fuzzy matching," the program compares each supplier name with all other names in the database. This method can identify similarities even when names aren't exactly the same.
 
-Install the required packages using:
+4. **Identifies Potential Matches**: When two supplier names are found to be very similar (based on a score you can set), the program marks them as potential matches.
 
-## Usage
+5. **Saves Results**: All potential matches are saved back to the database for later review.
 
-1. Place your input CSV file (named `supps.csv`) in the same directory as the script.
-2. Run the script: `python main.py`
-3. The script will process the data and save the results to `output_suppliers_score_90.xlsx`.
+6. **Provides Progress Updates**: As the program runs, it gives regular updates on how many suppliers it has processed and how long it's taking.
 
-## How it works
+## Why Is This Useful?
 
-1. **Data Loading**: The script reads the input CSV file using pandas.
+- **Reduce Duplicates**: It helps identify potential duplicate suppliers in your database.
+- **Improve Data Quality**: By finding similar names, you can standardize your supplier list.
+- **Save Time**: Instead of manually comparing thousands of names, this program does it quickly and efficiently.
 
-2. **Name Normalization**: Supplier names are normalized by converting to lowercase and removing leading/trailing whitespace.
+## How to Use the Program
 
-3. **Fuzzy Matching**: The script uses the `fuzzywuzzy` library to compare normalized names. It calculates a similarity score using the token set ratio algorithm.
+1. **Set Up**: Make sure you have the program installed on your computer and connected to your supplier database.
 
-4. **Multiprocessing**: To improve performance, the script utilizes Python's multiprocessing capabilities, distributing the workload across available CPU cores.
+2. **Run the Program**: Open a command prompt or terminal and navigate to the folder containing the program. Then type `python main.py` and press Enter.
 
-5. **Match Filtering**: Only matches with a similarity score above 89 are considered potential matches.
+3. **Enter Settings**: The program will ask you for three pieces of information:
+   - Matching Score: How similar names need to be to be considered a match (default is 85%).
+   - Number of Cores: How much of your computer's processing power to use (leave blank for maximum).
+   - Batch Size: How many suppliers to process at once (default is 200,000).
 
-6. **Progress Tracking**: The script provides progress updates every 10 rows processed.
+4. **Wait for Processing**: The program will start running. You'll see updates on its progress.
 
-7. **Result Compilation**: Matches are compiled into a new column in the DataFrame.
+5. **Review Results**: Once finished, the program will show you statistics about how many suppliers were processed and how many potential matches were found.
 
-8. **Output**: Results are saved to an Excel file, including all original data and the new "Potential_Matches" column.
+## Technical Details (for IT Support)
 
-## Customization
+- This program is written in Python and uses PostgreSQL as its database.
+- It requires several Python libraries including pandas, rapidfuzz, and SQLAlchemy.
+- The program uses multiprocessing to speed up the matching process on computers with multiple cores.
+- Results are stored in a new table in the database, with a timestamp in the table name.
 
-- Adjust the similarity score threshold (currently set to 89) in the `find_matches_and_scores` function.
-- Modify input and output file names in the `__main__` section.
+## Important Notes
 
-## Performance
+- Processing large numbers of suppliers can take a long time, depending on your computer's speed and the size of your supplier list.
+- The program requires a stable connection to your database throughout the process.
+- It's recommended to run this program during off-hours if you're dealing with a very large supplier list.
 
-The script uses multiprocessing to leverage multiple CPU cores, significantly improving processing speed for large datasets. The total processing time is printed upon completion.
+## Support
 
-## Note
-
-This script is designed for large datasets. For smaller datasets, consider removing the multiprocessing logic to simplify the code.
+If you encounter any issues or have questions about using this program, please contact your IT support team or the software developer.
