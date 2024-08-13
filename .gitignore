@@ -6,7 +6,7 @@
 /.vscode/
 /.idea/
 /.venv/
-
+/utils/__pycache__/
 # Ignore Python cache
 /__pycache__/
 
