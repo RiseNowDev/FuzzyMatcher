@@ -6,9 +6,10 @@
 /.vscode/
 /.idea/
 /.venv/
-/utils/__pycache__/
+
 # Ignore Python cache
-/__pycache__/
+__pycache__/
+*.pyc
 
 # Ignore output directory
 /output/
