@@ -1,5 +1,4 @@
 import pandas as pd
-from rapidfuzz import process, fuzz
 from multiprocessing import Pool, cpu_count
 import time
 import logging
@@ -9,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import inspect
 import psutil
 import datetime
-from utils import weighted_ratio, normalize_name, find_matches_and_scores
+from utils import normalize_name, find_matches_and_scores
 
 # Define the Base class for ORM models
 Base = declarative_base()
@@ -244,7 +243,7 @@ class MainDBProcessor:
 
 def main():
     db_url = "postgresql://overlord:password@localhost:5432/csu"
-    input_table_name = input("Enter the input table name: ")
+    input_table_name = str(input("Enter the input table name: ") or "csu_redux")
     percentage_score = float(input("Enter the percentage score to use for matching (default 85): ") or 85)
     num_cores_input = input("Enter the number of cores to use (default max): ")
     num_cores = int(num_cores_input) if num_cores_input.strip() else None
