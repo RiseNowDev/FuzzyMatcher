@@ -22,9 +22,11 @@ import datetime  # For timestamp generation
 Base = declarative_base()
 
 # Define ORM models
+# This Python class named Aggregate represents a table named 'csu_fivesixseven' with columns for
+# integer primary key, supplier name, normalized name, match status, and source.
 class Aggregate(Base):
     """
-    Represents an aggregate entity in the chosen table.
+    Represents an aggregate entity in the 'csu_fivesixseven' table.
 
     Attributes:
         i (int): The primary key of the entity.
@@ -33,7 +35,7 @@ class Aggregate(Base):
         matched (bool): Indicates if the entity has been matched.
         source (str): The source of the entity.
     """
-    __tablename__ = 'the_new_new'
+    __tablename__ = 'csu_fivesixseven'
     i = Column(Integer, primary_key=True)
     supplier_name = Column(String)
     normalized_name = Column(String)
@@ -385,10 +387,8 @@ class MainDBProcessor:
         self.ensure_fuzzy_match_results_columns_exist()
 
 if __name__ == "__main__":
-    # Define the database name
-    db_name = "csu"
     # Define the database URL for PostgreSQL
-    db_url = f"postgresql://overlord:password@localhost:5432/{db_name}"
+    db_url = "postgresql://overlord:password@localhost:5432/csu"
 
     # Prompt user for percentage score, defaulting to 85 if no input is provided
     percentage_score = float(input("Enter the percentage score to use for matching (default 85): ") or 85)
