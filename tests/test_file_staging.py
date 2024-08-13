@@ -2,7 +2,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 from utils.file_staging import create_table_and_import
 from psycopg2 import sql
-
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+   
 class TestCreateTableAndImport(unittest.TestCase):
     @patch('psycopg2.connect')
     def test_create_table_and_import(self, mock_connect):
