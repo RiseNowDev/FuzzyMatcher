@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"sqltools.connections": [
+			{
+				"previewLimit": 50,
+				"driver": "SQLite",
+				"name": "mydb",
+				"database": "datadb"
+			}
+		],
+		"sqltools.useNodeRuntime": true,
+		"wolf.disableHotModeWarning": true
+	}
+}
