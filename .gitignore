@@ -1,6 +1,5 @@
 # Ignore raw data directory
 /raw/
-
 # Ignore environment-related directories
 /.env/
 /.vscode/
