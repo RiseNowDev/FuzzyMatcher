@@ -79,7 +79,7 @@ def test_find_matches_and_scores_with_mocks(mocker):
     
     # Print out all calls to logging methods for debugging
     print("Logging calls:")
-    print("Debug calls:", mock_logging.debug.call_args_list)
+    print("Debug calls:", mock_logging.info.call_args_list)
     print("Info calls:", mock_logging.info.call_args_list)
 
     # Print the results for debugging

@@ -41,7 +41,7 @@ def rename_columns(df, i_col, source_col, supplier_name_col):
     return df
 
 def create_table_and_import(df, customer, project):
-    conn = psycopg2.connect("dbname=your_database user=your_username password=your_password host=your_host")
+    conn = psycopg2.connect("postgresql://overlord:password@localhost:5432/csu")
     cur = conn.cursor()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -54,6 +54,9 @@ def create_table_and_import(df, customer, project):
         sql.SQL(', ').join(map(sql.SQL, columns))
     )
     cur.execute(create_table_query)
+
+    # Strip spaces from column names
+    df.columns = [col.strip() for col in df.columns]
 
     # Import data
     for _, row in df.iterrows():
@@ -80,9 +83,6 @@ def main():
     file_type = determine_file_type(file_path)
     encoding = detect_encoding(file_path)
     df = read_file(file_path, file_type, encoding)
-
-    print("File preview:")
-    print(df.head())
 
     customer = prompt_user("Enter customer name: ")
     project = prompt_user("Enter project name: ")

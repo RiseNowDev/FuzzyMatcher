@@ -14,6 +14,8 @@ from project_utils import normalize_name, find_matches_and_scores
 Base = declarative_base()
 
 # Define ORM models
+# This Python class named `Aggregate` defines a table with columns for supplier information and
+# provides a method to set the table name dynamically.
 class Aggregate(Base):
     __tablename__ = 'csu_redux'  # This will be overridden
     i = Column(Integer, primary_key=True)
@@ -26,6 +28,8 @@ class Aggregate(Base):
     def set_table_name(cls, name):
         cls.__table__.name = name
 
+# This class represents a table named 'processing_status' with columns for id, last_processed_id,
+# total_records, and processed_records.
 class ProcessingStatus(Base):
     __tablename__ = 'processing_status'
     id = Column(Integer, primary_key=True)
@@ -33,6 +37,8 @@ class ProcessingStatus(Base):
     total_records = Column(Integer)
     processed_records = Column(Integer)
 
+# The `FuzzyMatchResult` class defines a database table with columns for storing fuzzy matching
+# results between strings along with their similarity scores and validation status.
 class FuzzyMatchResult(Base):
     __tablename__ = 'fuzzy_match_results'  # This will be overridden
     id = Column(Integer, primary_key=True)
@@ -48,6 +54,8 @@ class FuzzyMatchResult(Base):
     def set_table_name(cls, name):
         cls.__table__.name = name
 
+# The MainDBProcessor class initializes with parameters for database URL, input table name, percentage
+# score, number of cores, and batch size, and sets up database connection and session.
 class MainDBProcessor:
     def __init__(self, db_url, input_table_name, percentage_score=85, num_cores=None, batch_size=200000):
         self.db_url = db_url
@@ -61,18 +69,24 @@ class MainDBProcessor:
         self.metadata = MetaData()
         self.metadata.reflect(bind=self.engine)
         
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.output_table_name = f'fuzzy_match_results_{timestamp}'
+        self.output_table_name = f'results_{self.input_table_name}'
         
         self._setup_logging()
         self._create_tables()
         self.ensure_columns_exist()
 
     def check_memory_usage(self):
+        """
+        The function `check_memory_usage` logs the current memory usage as a percentage.
+        """
         memory = psutil.virtual_memory()
         self.log_status(f"Memory usage: {memory.percent}%")
 
     def insert_in_batches(self, matches):
+        """
+        The function `insert_in_batches` inserts data in batches into a database table while handling
+        conflicts.
+        """
         batch_size = 10000
         for i in range(0, len(matches), batch_size):
             batch = matches[i:i + batch_size]
@@ -94,6 +108,10 @@ class MainDBProcessor:
             self.session.commit()
 
     def process_suppliers(self):
+        """
+        The function `process_suppliers` processes data from the Aggregate table in batches, updating
+        processing status and logging progress until all records are processed.
+        """
         total_rows = self.session.query(func.count(Aggregate.i)).scalar()
         self.log_status(f"Total rows in Aggregate table: {total_rows}")
 
@@ -143,6 +161,11 @@ class MainDBProcessor:
         self.session.close()
 
     def update_normalized_names_batch(self, updates):
+        """
+        The function `update_normalized_names_batch` updates the `normalized_name` field in the
+        `Aggregate` table for a batch of records based on provided normalized names in a batch 
+        for a database table called `Aggregate`. The method takes a list of updates as input
+        """
         update_stmt = (
             Aggregate.__table__.update()
             .where(Aggregate.i == bindparam('b_i'))
@@ -156,6 +179,10 @@ class MainDBProcessor:
             self.session.rollback()
 
     def ensure_columns_exist(self):
+        """
+        The function `ensure_columns_exist` checks for the existence of specific columns in a table and
+        adds them if they are missing.
+        """
         inspector = inspect(self.engine)
         existing_columns = [col['name'] for col in inspector.get_columns(self.input_table_name)]
 
@@ -169,6 +196,10 @@ class MainDBProcessor:
                 self.log_status(f"Added 'matched' column to {self.input_table_name} table")
 
     def ensure_fuzzy_match_results_columns_exist(self):
+        """
+        The function `ensure_fuzzy_match_results_columns_exist` checks if required columns exist in a
+        database table and adds them if they are missing.
+        """
         inspector = inspect(self.engine)
         existing_columns = [col['name'] for col in inspector.get_columns(self.output_table_name)]
 
@@ -199,6 +230,11 @@ class MainDBProcessor:
         self.ensure_fuzzy_match_results_columns_exist()
 
     def reset_processing_status(self):
+        """
+        The function `reset_processing_status` deletes all records from the ProcessingStatus table,
+        creates a new ProcessingStatus object with initial values, and commits the changes to the
+        database.
+        """
         self.session.query(ProcessingStatus).delete()
         self.session.commit()
         status = ProcessingStatus(last_processed_id=0, total_records=0, processed_records=0)
@@ -206,6 +242,10 @@ class MainDBProcessor:
         self.session.commit()
 
     def update_normalized_names(self):
+        """
+        The function `update_normalized_names` updates normalized names for records where it is
+        currently None.
+        """
         self.log_status("Updating normalized names...")
         query = self.session.query(Aggregate).filter(Aggregate.normalized_name.is_(None))
         total = query.count()
@@ -224,7 +264,11 @@ class MainDBProcessor:
         self.log_status("Finished updating normalized names.")
 
     def create_joined_view(self):
-        view_name = f"joined_view_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        """
+        The function creates a joined view in a database by performing a left join between two tables
+        and logs the status.
+        """
+        view_name = f"joined_view_{self.input_table_name}"
         query = f"""
         CREATE VIEW {view_name} AS
         SELECT a.*, f.matched_string, f.similarity_score, f.validation_status

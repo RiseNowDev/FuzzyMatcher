@@ -87,10 +87,13 @@ def test_update_normalized_names(processor, mock_session):
         processor.update_normalized_names()
     
     assert mock_update.called
-
+    
 def test_create_joined_view(processor, mock_engine):
-    processor.create_joined_view()
+    with patch.object(processor, 'log_status') as mock_log:
+        processor.create_joined_view()
+        mock_log.assert_called_once_with("Created joined view: joined_view_test_table")
     assert mock_engine.begin.called
+    
 
 if __name__ == '__main__':
     pytest.main()
