@@ -1,6 +1,7 @@
 from rapidfuzz import fuzz, process
 import re
-import logging, tqdm
+import logging
+from tqdm import tqdm
 
 # Custom weighted ratio function combining multiple string similarity metrics
 def weighted_ratio(s1, s2, score_cutoff=0):
@@ -58,6 +59,10 @@ def find_matches_and_scores(args: tuple) -> list:
 
     """
     chunk, all_normalized_names, percentage_score = args
+    
+    # Set up logging
+    logging.getLogger().setLevel(logging.DEBUG)
+    
     matches = []
     for idx, row in tqdm(chunk.iterrows(), total=len(chunk), desc="Processing chunk", leave=False):
         normalized_name = row['normalized_name']
@@ -68,14 +73,14 @@ def find_matches_and_scores(args: tuple) -> list:
             limit=100
         )
         
-        # Log the results of the matching
         logging.debug(f"Matching results for '{normalized_name}': {results}")
 
-        # Filter results based on percentage_score during extraction
         filtered_results = [match for match in results if match[1] >= percentage_score and row['i'] < match[2]]
         if not filtered_results:
             logging.debug(f"No matches found for '{normalized_name}' with score >= {percentage_score}")
         else:
             matches.extend((row['i'], normalized_name, all_normalized_names[match[2]], match[2], match[1], row['source'])
                            for match in filtered_results)
+    
+    logging.debug(f"Total matches found: {len(matches)}")
     return matches

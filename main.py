@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import inspect
 import psutil
 import datetime
-from utils import normalize_name, find_matches_and_scores
+from project_utils import normalize_name, find_matches_and_scores
 
 # Define the Base class for ORM models
 Base = declarative_base()
