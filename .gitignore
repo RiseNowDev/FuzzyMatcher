@@ -1,6 +1,5 @@
 # Ignore raw data directory
 /raw/
-
 # Ignore environment-related directories
 /.env/
 /.vscode/
@@ -8,7 +7,8 @@
 /.venv/
 
 # Ignore Python cache
-/__pycache__/
+__pycache__/
+*.pyc
 
 # Ignore output directory
 /output/

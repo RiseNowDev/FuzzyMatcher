@@ -16,7 +16,12 @@ numpy = "^2.0.1"
 sqlalchemy = "^2.0.32"
 psycopg2 = "^2.9.9"
 chardet = "^5.2.0"
+pytest = "^8.3.2"
+pytest-mock = "^3.14.0"
 
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
 
 [build-system]
 requires = ["poetry-core"]
